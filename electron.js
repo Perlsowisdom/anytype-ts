@@ -64,6 +64,30 @@ ipcMain.on('storeSet', (e, key, value) => {
 ipcMain.on('storeDelete', (e, key) => {
 	e.returnValue = store.delete(key);
 });
+ipcMain.on('dockWindow', (event, position) => {
+  const { screen } = require('electron');
+  const display = screen.getPrimaryDisplay();
+  const { width, height } = display.workAreaSize;
+
+  if (mainWindow) {
+    switch (position) {
+      case 'left':
+        mainWindow.setBounds({ x: 0, y: 0, width: width / 2, height });
+        break;
+      case 'right':
+        mainWindow.setBounds({ x: width / 2, y: 0, width: width / 2, height });
+        break;
+      case 'top':
+        mainWindow.setBounds({ x: 0, y: 0, width, height: height / 2 });
+        break;
+      case 'bottom':
+        mainWindow.setBounds({ x: 0, y: height / 2, width, height: height / 2 });
+        break;
+      default:
+        break;
+    }
+  }
+});
 
 let deeplinkingUrl = '';
 let waitLibraryPromise = null;
