@@ -2,8 +2,6 @@ name: Release
 
 on:
   push:
-    tags:
-      - v*
 
 permissions:
   contents: 'write'
@@ -15,8 +13,6 @@ jobs:
     strategy:
       matrix:
         os:
-          - macos-13
-          - ubuntu-22.04
           - windows-latest
 
     steps:
@@ -42,12 +38,7 @@ jobs:
         with:
           python-version: 3.11
 
-      - name: Install LibSecret
-        if: matrix.os == 'ubuntu-latest' # only for ubuntu 24 or latest
-        run:
-          sudo apt-get install libsecret-1-dev
-
-      - name: Install AzureSignTool
+          - name: Install AzureSignTool
         if: ${{ startsWith(matrix.os, 'windows-') }}
         run: dotnet tool install --global AzureSignTool
 
@@ -94,43 +85,6 @@ jobs:
         run: npm run build:nmh
         env:
           CGO_ENABLED: 0
-
-      - name: Build Front Mac OS
-        if: ${{ startsWith(matrix.os, 'macos-') }}
-        uses: samuelmeuli/action-electron-builder@v1
-        with:
-          github_token: ${{secrets.TOKEN}}
-          mac_certs: ${{ secrets.MAC_CERT_TEXT }}
-          mac_certs_password: ${{ secrets.MAC_CERT_PASS }}
-          release: ${{ startsWith(github.ref, 'refs/tags/v') }}
-          args: --arm64 --x64
-        env:
-          DEBUG: electron-builder
-          APPLEID: ${{ secrets.APPLEID }}
-          APPLEIDPASS: ${{ secrets.APPLEIDPASS }}
-          APPLETEAM: ${{ secrets.APPLETEAM }}
-          DO_KEY_ID: ${{ secrets.DO_KEY_ID }}
-          DO_SECRET_KEY: ${{ secrets.DO_SECRET_KEY }}
-          USE_HARD_LINKS: false
-          SENTRY_AUTH_TOKEN: ${{secrets.SENTRY_AUTH_TOKEN}}
-
-      - name: Build Front Other
-        if: ${{ !startsWith(matrix.os, 'macos-') }}
-        uses: samuelmeuli/action-electron-builder@v1
-        with:
-          github_token: ${{secrets.TOKEN}}
-          release: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        env:
-          DEBUG: electron-builder
-          DO_KEY_ID: ${{ secrets.DO_KEY_ID }}
-          DO_SECRET_KEY: ${{ secrets.DO_SECRET_KEY }}
-          USE_HARD_LINKS: false
-          AZURE_KEY_VAULT_URI: ${{ secrets.AZURE_KEY_VAULT_URI }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_CERT_NAME: ${{ secrets.AZURE_CERT_NAME }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          SENTRY_AUTH_TOKEN: ${{secrets.SENTRY_AUTH_TOKEN}}
 
       - name: Make artifacts dir
         run: |
