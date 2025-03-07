@@ -1,0 +1,207 @@
+name: Nightly Builds
+
+on:
+  push:
+    branches:
+      - 'nightly*'
+      - 'feature/dock-to-desktop'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: electron.builder channel
+
+permissions:
+  contents: 'write'
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os:
+          - macos-14
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Setup
+        run: |
+          git config --global url."https://${{secrets.USER}}:${{secrets.TOKEN}}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://${{secrets.USER}}:${{secrets.TOKEN}}@api.github.com/".insteadOf "https://api.github.com/"
+
+      - name: Install Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+          check-latest: true
+
+      - name: Check GO version
+        shell: bash
+        run: go version
+
+      - name: Install AzureSignTool
+        if: ${{ startsWith(matrix.os, 'windows-') }}
+        run: dotnet tool install --global AzureSignTool
+
+      - name: Check out Git repository
+        uses: actions/checkout@v1
+
+      - name: Set up Python 3.11 # downgrade python for macos-14 and above (error: npm ERR! ModuleNotFoundError: No module named 'distutils')
+        if: startsWith(matrix.os, 'macos-') && (matrix.os == 'macos-14' || matrix.os > 'macos-14')
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install LibSecret
+        if: matrix.os == 'ubuntu-latest' # only for ubuntu 24 or latest
+        run:
+          sudo apt-get install libsecret-1-dev
+
+      - name: Setup distutils
+        if: ${{ !startsWith(matrix.os, 'windows-') }}
+        run: sudo -H pip install setuptools
+
+      - name: Install Node.js, NPM and Yarn
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.9.0
+
+      - name: Install Webpack
+        run: npm install --save-dev webpack-cli --legacy-peer-deps
+
+      - name: Update locale
+        run: npm run update:locale
+        env:
+          GITHUB_TOKEN: ${{secrets.TOKEN}}
+
+      - name: Nightly mode env settings
+        shell: bash
+        run: |
+          # choice channel name {{
+          if [[ -z "${{ github.event.inputs.channel }}" ]]; then
+            # choice default value for channel from ref name
+            if echo "${{ github.ref_name }}" | grep -q "beta"; then
+              CHANNEL="beta"
+            else
+              CHANNEL="alpha"
+            fi
+          else
+            CHANNEL="${{github.event.inputs.channel}}"
+          fi
+          echo "CHANNEL=$CHANNEL" >> $GITHUB_ENV
+          # }}
+          # choice s3 bucket for publishing {{
+          if [[ "$CHANNEL" == "beta" ]]; then
+            S3_BUCKET="${{secrets.NIGHTLY_AWS_S3_BUCKET_BETA}}"
+          else
+            S3_BUCKET="${{secrets.NIGHTLY_AWS_S3_BUCKET}}"
+          fi
+          echo "S3_BUCKET=$S3_BUCKET" >> $GITHUB_ENV
+          # }}
+          echo "MIDDLEWARE_VERSION=nightly" >> $GITHUB_ENV
+          echo "DOWNLOAD_ASSETS_URL=https://${S3_BUCKET}.s3.${{ secrets.NIGHTLY_AWS_REGION }}.amazonaws.com/mw" >> $GITHUB_ENV
+
+      #- name: Print all environment variables
+      #  run: printenv
+
+      - name: Nightly mode edit package.json
+        shell: bash
+        run: |
+          jq \
+            --tab \
+            --arg date "$(TZ=Europe/Berlin date +%Y%m%d%H%M)" \
+            '
+            .name = "anytype-dev" |
+            .version |= (. | split(".") | .[0] + "." + .[1] + "." + $date + "-${{ env.CHANNEL }}") |
+            .description = "Anytype Nightly" |
+            .build.appId = "com.anytype.anytype-dev" |
+            .build.productName = "Anytype Nightly" |
+            .build.protocols[0].name = "Anytype Nightly" |
+            .build.mac.publish |= map(del(.url)) |
+            .build.mac.publish[0].provider = "s3" |
+            .build.mac.publish[0].bucket = "${{ env.S3_BUCKET }}" |
+            .build.mac.publish[0].region = "${{ secrets.NIGHTLY_AWS_REGION }}" |
+            .build.win.publish |= map(del(.url)) |
+            .build.win.publish[0].provider = "s3" |
+            .build.win.publish[0].bucket = "${{ env.S3_BUCKET }}" |
+            .build.win.publish[0].region = "${{ secrets.NIGHTLY_AWS_REGION }}" |
+            .build.linux.description = "Anytype Nightly" |
+            .build.linux.desktop.Name = "Anytype Nightly" |
+            .build.linux.publish |= map(del(.url)) |
+            .build.linux.publish[0].provider = "s3" |
+            .build.linux.publish[0].bucket = "${{ env.S3_BUCKET }}" |
+            .build.linux.publish[0].region = "${{ secrets.NIGHTLY_AWS_REGION }}"
+          ' package.json > tmp.json && mv tmp.json package.json
+
+      - name: debug cat package.json
+        shell: bash
+        run: cat package.json
+
+#      #- name: Update Deps
+#      #  run: npm run build:deps
+
+      - name: Update Addon only AMD
+        if: ${{ startsWith(matrix.os, 'windows-') }}
+        shell: bash
+        run: |
+          ./update-ci.sh --user="${{secrets.USER}}" --token="${{secrets.TOKEN}}" --os="${{matrix.os}}" --middleware-version="${{env.MIDDLEWARE_VERSION}}"
+
+      - name: Update Addon AMD and ARM
+        if: ${{ !startsWith(matrix.os, 'windows-') }}
+        shell: bash
+        run: |
+          ./update-ci.sh --user="${{secrets.USER}}" --token="${{secrets.TOKEN}}" --os="${{matrix.os}}" --middleware-version="${{env.MIDDLEWARE_VERSION}}" --arch="arm"
+          ./update-ci.sh --user="${{secrets.USER}}" --token="${{secrets.TOKEN}}" --os="${{matrix.os}}" --middleware-version="${{env.MIDDLEWARE_VERSION}}" --arch="amd"
+
+      - name: Build Native Messaging Host Windows
+        if: ${{ startsWith(matrix.os, 'windows-') }}
+        run: npm run build:nmh-win
+        env:
+          CGO_ENABLED: 0
+
+      - name: Build Native Messaging Host
+        if: ${{ !startsWith(matrix.os, 'windows-') }}
+        run: npm run build:nmh
+        env:
+          CGO_ENABLED: 0
+
+      - name: Build Front Mac OS
+        if: ${{ startsWith(matrix.os, 'macos-') }}
+        uses: samuelmeuli/action-electron-builder@v1
+        with:
+          github_token: ${{secrets.TOKEN}}
+          mac_certs: ${{ secrets.MAC_CERT_TEXT }}
+          mac_certs_password: ${{ secrets.MAC_CERT_PASS }}
+          release: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          args: --arm64 --x64 --publish always --config.publish.provider=s3 --config.publish.bucket=${{ env.S3_BUCKET }} --config.publish.region=${{ secrets.NIGHTLY_AWS_REGION }}
+        env:
+          DEBUG: electron-builder
+          APPLEID: ${{ secrets.APPLEID }}
+          APPLEIDPASS: ${{ secrets.APPLEIDPASS }}
+          APPLETEAM: ${{ secrets.APPLETEAM }}
+          USE_HARD_LINKS: false
+          SENTRY_AUTH_TOKEN: ${{secrets.SENTRY_AUTH_TOKEN}}
+          AWS_ACCESS_KEY_ID: ${{ secrets.NIGHTLY_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.NIGHTLY_AWS_SECRET_ACCESS_KEY }}
+          DOWNLOAD_ASSETS_URL: ${{ env.DOWNLOAD_ASSETS_URL }}
+
+      - name: Build Front Other
+        if: ${{ !startsWith(matrix.os, 'macos-') }}
+        uses: samuelmeuli/action-electron-builder@v1
+        with:
+          github_token: ${{secrets.TOKEN}}
+          release: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          args: --publish always --config.publish.provider=s3 --config.publish.bucket=${{ env.S3_BUCKET }} --config.publish.region=${{ secrets.NIGHTLY_AWS_REGION }}
+        env:
+          DEBUG: electron-builder
+          USE_HARD_LINKS: false
+          AZURE_KEY_VAULT_URI: ${{ secrets.AZURE_KEY_VAULT_URI }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_CERT_NAME: ${{ secrets.AZURE_CERT_NAME }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          SENTRY_AUTH_TOKEN: ${{secrets.SENTRY_AUTH_TOKEN}}
+          AWS_ACCESS_KEY_ID: ${{ secrets.NIGHTLY_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.NIGHTLY_AWS_SECRET_ACCESS_KEY }}
+          DOWNLOAD_ASSETS_URL: ${{ env.DOWNLOAD_ASSETS_URL }}
