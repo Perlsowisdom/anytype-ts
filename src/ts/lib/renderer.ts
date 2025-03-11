@@ -29,7 +29,16 @@ class Renderer {
 	remove (event: string) {
 		U.Common.getElectron().removeAllListeners(event);
 	};
-
+    // Function to dock the window to the left
+    dockWindowToLeft() {
+        ipcRenderer.send('dockWindow', 'left');
+    }
 };
+
+// Example usage: Add an event listener to a button (or any other UI element) to trigger the docking
+document.getElementById('dock-left-btn')?.addEventListener('click', () => {
+    const renderer = new Renderer();
+    renderer.dockWindowToLeft();
+});
 
 export default new Renderer();
