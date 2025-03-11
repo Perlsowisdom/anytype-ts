@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    tags:
+      - v*
 
 permissions:
   contents: 'write'
@@ -14,6 +16,7 @@ jobs:
       matrix:
         os:
           - macos-13
+          - ubuntu-22.04
           - windows-latest
 
     steps:
@@ -21,6 +24,7 @@ jobs:
         run: |
           git config --global url."https://${{secrets.USER}}:${{secrets.TOKEN}}@github.com/".insteadOf "https://github.com/"
           git config --global url."https://${{secrets.USER}}:${{secrets.TOKEN}}@api.github.com/".insteadOf "https://api.github.com/"
+
       - name: Install Go
         uses: actions/setup-go@v1
         with:
@@ -32,18 +36,19 @@ jobs:
           echo GOPATH=$(go env GOPATH) >> $GITHUB_ENV
           echo GOBIN=$(go env GOPATH)/bin >> $GITHUB_ENV
           echo $(go env GOPATH)/bin >> $GITHUB_PATH
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: 3.11
 
       - name: Install LibSecret
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' # only for ubuntu 24 or latest
         run:
           sudo apt-get install libsecret-1-dev
 
       - name: Install AzureSignTool
-        if: matrix.os == 'windows-latest'
+        if: ${{ startsWith(matrix.os, 'windows-') }}
         run: dotnet tool install --global AzureSignTool
 
       - name: Check out Git repository
@@ -65,31 +70,33 @@ jobs:
       #- name: Update Deps
       #  run: npm run build:deps
 
-      - name: Update Addon Windows
-        if: matrix.os == 'windows-latest'
-        shell: bash
-        run: ./update-ci.sh ${{secrets.USER}} ${{secrets.TOKEN}} ${{matrix.os}}
-
-      - name: Update Addon
-        if: matrix.os != 'windows-latest'
+      - name: Update Addon only AMD
+        if: ${{ startsWith(matrix.os, 'windows-') }}
         shell: bash
         run: |
-          ./update-ci.sh ${{secrets.USER}} ${{secrets.TOKEN}} ${{matrix.os}} arm
-          ./update-ci.sh ${{secrets.USER}} ${{secrets.TOKEN}} ${{matrix.os}} amd
+          ./update-ci.sh --user="${{secrets.USER}}" --token="${{secrets.TOKEN}}" --os="${{matrix.os}}" --middleware-version="$( cat middleware.version )"
+
+      - name: Update Addon AMD and ARM
+        if: ${{ !startsWith(matrix.os, 'windows-') }}
+        shell: bash
+        run: |
+          ./update-ci.sh --user="${{secrets.USER}}" --token="${{secrets.TOKEN}}" --os="${{matrix.os}}" --middleware-version="$( cat middleware.version )" --arch="arm"
+          ./update-ci.sh --user="${{secrets.USER}}" --token="${{secrets.TOKEN}}" --os="${{matrix.os}}" --middleware-version="$( cat middleware.version )" --arch="amd"
+
       - name: Build Native Messaging Host Windows
-        if: matrix.os == 'windows-latest'
+        if: ${{ startsWith(matrix.os, 'windows-') }}
         run: npm run build:nmh-win
         env:
           CGO_ENABLED: 0
 
       - name: Build Native Messaging Host
-        if: matrix.os != 'windows-latest'
+        if: ${{ !startsWith(matrix.os, 'windows-') }}
         run: npm run build:nmh
         env:
           CGO_ENABLED: 0
 
       - name: Build Front Mac OS
-        if: matrix.os == 'macos-13'
+        if: ${{ startsWith(matrix.os, 'macos-') }}
         uses: samuelmeuli/action-electron-builder@v1
         with:
           github_token: ${{secrets.TOKEN}}
@@ -108,7 +115,7 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{secrets.SENTRY_AUTH_TOKEN}}
 
       - name: Build Front Other
-        if: matrix.os != 'macos-13'
+        if: ${{ !startsWith(matrix.os, 'macos-') }}
         uses: samuelmeuli/action-electron-builder@v1
         with:
           github_token: ${{secrets.TOKEN}}
@@ -128,16 +135,19 @@ jobs:
       - name: Make artifacts dir
         run: |
           mkdir -p artifacts
+
       - name: Cleanup artifacts
-        if: matrix.os != 'windows-latest'
+        if: ${{ !startsWith(matrix.os, 'windows-') }}
         run: |
           mv dist/*.{zip,dmg,deb,AppImage,exe,snap,rpm,tar.gz} artifacts || true
+
       - name: Cleanup artifacts Windows
-        if: matrix.os == 'windows-latest'
+        if: ${{ startsWith(matrix.os, 'windows-') }}
         run: |
           rm dist/anytypeHelper.exe
           rm dist/nativeMessagingHost.exe
           mv dist/*.exe artifacts
+
       - name: Release
         uses: softprops/action-gh-release@v0.1.14
         if: startsWith(github.ref, 'refs/tags/')
@@ -147,20 +157,22 @@ jobs:
           GITHUB_TOKEN: ${{secrets.TOKEN}}
 
       - name: debug
-        if: matrix.os != 'windows-latest'
+        if: ${{ !startsWith(matrix.os, 'windows-') }}
         run: |
           echo "list dist/:"
           ls -alh dist/
           echo "list artifacts/:"
           ls -alh artifacts/
+
       - name: debug Windows
-        if: matrix.os == 'windows-latest'
+        if: ${{ startsWith(matrix.os, 'windows-') }}
         shell: pwsh
         run: |
           Get-ChildItem -Path dist | Format-Table -Property Mode, LastWriteTime, Length, Name
           Get-ChildItem -Path artifacts | Format-Table -Property Mode, LastWriteTime, Length, Name
+
       - name: Upload artifacts to HTTP server
-        if: matrix.os != 'windows-latest'
+        if: ${{ !startsWith(matrix.os, 'windows-') }}
         run: |
           RELEASE_VERSION=$( echo "$GITHUB_REF_NAME" | perl -pe 's/^[a-zA-Z]+//' )
           cd artifacts/
@@ -181,8 +193,9 @@ jobs:
               --upload-file ${FILE} \
               ${UPLOAD_URL}
           done
+
       - name: Upload artifacts to HTTP server Windows
-        if: matrix.os == 'windows-latest'
+        if: ${{ startsWith(matrix.os, 'windows-') }}
         shell: pwsh
         run: |
           $releaseVersion = $env:GITHUB_REF_NAME -replace '^[a-zA-Z]+', ''
@@ -200,6 +213,7 @@ jobs:
             echo "Uploading files to $uploadUrl"
             curl.exe -H "Authorization: Bearer ${{ secrets.PUBLISH_RELEASES_TOKEN }}" -T $file.FullName $uploadUrl
           }
+
       - name: Delete old releases
         uses: dev-drprasad/delete-older-releases@v0.2.0
         with:
