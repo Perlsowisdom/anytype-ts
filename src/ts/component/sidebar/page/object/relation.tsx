@@ -2,7 +2,7 @@ import * as React from 'react';
 import $ from 'jquery';
 import { observer } from 'mobx-react';
 import { Label, Button, Icon } from 'Component';
-import { I, S, U, sidebar, translate, keyboard, Relation, C, Preview } from 'Lib';
+import { I, S, U, sidebar, translate, keyboard, Relation, C, Preview, analytics } from 'Lib';
 import Section from 'Component/sidebar/section';
 
 const SidebarPageObjectRelation = observer(class SidebarPageObjectRelation extends React.Component<I.SidebarPageComponent, {}> {
@@ -44,21 +44,28 @@ const SidebarPageObjectRelation = observer(class SidebarPageObjectRelation exten
 				<div className="body customScrollbar">
 					{sections.map((section, i) => {
 						const { id, name, description, withToggle } = section;
+						const lcn = [];
+						const onToggle = withToggle ? () => this.onToggle(id) : null;
+
+						if (withToggle) {
+							lcn.push('sectionToggle');
+						};
 
 						return (
 							<div id={`relationGroup-${id}`} className="group" key={id}>
 								{name ? (
 									<div className="titleWrap">
-
-										{withToggle ? (
-											<Label text={name} onClick={() => this.onToggle(id)} className="sectionToggle" />
-										) : <Label text={name} />}
+										<Label text={name} onClick={onToggle} className={lcn.join(' ')} />
 
 										{description ? (
 											<Icon
-												className="groupDescription"
-												onMouseEnter={e => this.onShowDescription(e, id, description)}
-												onMouseLeave={() => Preview.tooltipHide()}
+												className="question withBackground"
+												tooltipClassName="relationGroupDescription"
+												tooltip={description}
+												tooltipX={I.MenuDirection.Right}
+												tooltipY={I.MenuDirection.Center}
+												tooltipOffsetX={-8}
+												tooltipDelay={0}
 											/>
 										) : ''}
 									</div>
@@ -87,13 +94,16 @@ const SidebarPageObjectRelation = observer(class SidebarPageObjectRelation exten
 		);
 	};
 
+	componentDidMount () {
+		analytics.event('ScreenObjectRelation');
+	};
+
 	getObject () {
 		const { rootId } = this.props;
 		return S.Detail.get(rootId, rootId);
 	};
 
 	getSections () {
-		const { config } = S.Common;
 		const { rootId } = this.props;
 		const object = this.getObject();
 		const isTemplate = U.Object.isTemplate(object.type);
@@ -136,7 +146,7 @@ const SidebarPageObjectRelation = observer(class SidebarPageObjectRelation exten
 		const object = this.getObject();
 		const rootId = object.targetObjectType || object.type;
 
-		sidebar.rightPanelSetState(isPopup, { page: 'type', rootId, noPreview: true });
+		sidebar.rightPanelSetState(isPopup, { page: 'type', rootId, noPreview: true, back: 'object/relation' });
 	};
 
 	onDragStart (e: any, item: any) {
@@ -194,17 +204,8 @@ const SidebarPageObjectRelation = observer(class SidebarPageObjectRelation exten
 
 		U.Common.toggle(list, 200);
 		toggle.text(isOpen ? translate('commonShowMore') : translate('commonShowLess'));
-	};
 
-	onShowDescription (e: any, id: string, text: string) {
-		Preview.tooltipShow({
-			text,
-			element: $(e.currentTarget),
-			typeX: I.MenuDirection.Right,
-			typeY: I.MenuDirection.Center,
-			className: 'relationGroupDescription',
-			offsetX: -8,
-		});
+		analytics.event('ScreenObjectRelationToggle', { type: isOpen ? 'Collapse' : 'Extend' });
 	};
 
 });
